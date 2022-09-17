@@ -6,6 +6,7 @@
 import io
 import re
 import socket
+import logging
 
 from gunicorn.http.body import ChunkedReader, LengthReader, EOFReader, Body
 from gunicorn.http.errors import (
@@ -25,6 +26,8 @@ HEADER_RE = re.compile(r"[\x00-\x1F\x7F()<>@,;:\[\]={} \t\\\"]")
 METH_RE = re.compile(r"[A-Z0-9$-_.]{3,20}")
 VERSION_RE = re.compile(r"HTTP/(\d+)\.(\d+)")
 
+logger = logging.getLogger(__name__)
+
 
 class Message(object):
     def __init__(self, cfg, unreader, peer_addr):
@@ -40,7 +43,7 @@ class Message(object):
         # set headers limits
         self.limit_request_fields = cfg.limit_request_fields
         if (self.limit_request_fields <= 0
-            or self.limit_request_fields > MAX_HEADERS):
+                or self.limit_request_fields > MAX_HEADERS):
             self.limit_request_fields = MAX_HEADERS
         self.limit_request_field_size = cfg.limit_request_field_size
         if self.limit_request_field_size < 0:
@@ -49,11 +52,16 @@ class Message(object):
         # set max header buffer size
         max_header_field_size = self.limit_request_field_size or DEFAULT_MAX_HEADERFIELD_SIZE
         self.max_buffer_headers = self.limit_request_fields * \
-            (max_header_field_size + 2) + 4
+                                  (max_header_field_size + 2) + 4
 
         unused = self.parse(self.unreader)
         self.unreader.unread(unused)
         self.set_body_reader()
+
+        logger.warning(
+            f"[Message __init__] {self.headers=} {self.body=}"
+            f" {self.unreader=} {self.unreader.__dict__=}"
+        )
 
     def parse(self, unreader):
         raise NotImplementedError()
@@ -69,8 +77,8 @@ class Message(object):
         scheme_header = False
         secure_scheme_headers = {}
         if ('*' in cfg.forwarded_allow_ips or
-            not isinstance(self.peer_addr, tuple)
-            or self.peer_addr[0] in cfg.forwarded_allow_ips):
+                not isinstance(self.peer_addr, tuple)
+                or self.peer_addr[0] in cfg.forwarded_allow_ips):
             secure_scheme_headers = cfg.secure_scheme_headers
 
         # Parse headers into key/value pairs paying attention
@@ -172,15 +180,19 @@ class Request(Message):
         # get max request line size
         self.limit_request_line = cfg.limit_request_line
         if (self.limit_request_line < 0
-            or self.limit_request_line >= MAX_REQUEST_LINE):
+                or self.limit_request_line >= MAX_REQUEST_LINE):
             self.limit_request_line = MAX_REQUEST_LINE
 
+        # request counter (for keepalive connetions)
         self.req_number = req_number
         self.proxy_protocol_info = None
         super().__init__(cfg, unreader, peer_addr)
 
     def get_data(self, unreader, buf, stop=False):
         data = unreader.read()
+        logger.warning(
+            f"[Request get_data] {len(data)=}  {data if len(data) < 5000 else None}"
+        )
         if not data:
             if stop:
                 raise StopIteration()
@@ -193,6 +205,9 @@ class Request(Message):
 
         # get request line
         line, rbuf = self.read_line(unreader, buf, self.limit_request_line)
+        logger.warning(
+            f"[Request parse] {line=} {rbuf=}"
+        )
 
         # proxy protocol
         if self.proxy_protocol(bytes_to_str(line)):
@@ -230,6 +245,10 @@ class Request(Message):
 
         ret = data[idx + 4:]
         buf = None
+
+        logger.warning(
+            f"[Request parse] body {len(ret)=}  {ret if len(ret) < 5000 else None}"
+        )
         return ret
 
     def read_line(self, unreader, buf, limit=0):
@@ -274,8 +293,8 @@ class Request(Message):
     def proxy_protocol_access_check(self):
         # check in allow list
         if ("*" not in self.cfg.proxy_allow_ips and
-            isinstance(self.peer_addr, tuple) and
-            self.peer_addr[0] not in self.cfg.proxy_allow_ips):
+                isinstance(self.peer_addr, tuple) and
+                self.peer_addr[0] not in self.cfg.proxy_allow_ips):
             raise ForbiddenProxyRequest(self.peer_addr[0])
 
     def parse_proxy_protocol(self, line):

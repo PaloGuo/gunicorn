@@ -39,7 +39,7 @@ class BaseSocket(object):
     def set_options(self, sock, bound=False):
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         if (self.conf.reuse_port
-            and hasattr(socket, 'SO_REUSEPORT')):  # pragma: no cover
+                and hasattr(socket, 'SO_REUSEPORT')):  # pragma: no cover
             try:
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
             except socket.error as err:
@@ -72,7 +72,6 @@ class BaseSocket(object):
 
 
 class TCPSocket(BaseSocket):
-
     FAMILY = socket.AF_INET
 
     def __str__(self):
@@ -90,7 +89,6 @@ class TCPSocket(BaseSocket):
 
 
 class TCP6Socket(TCPSocket):
-
     FAMILY = socket.AF_INET6
 
     def __str__(self):
@@ -99,7 +97,6 @@ class TCP6Socket(TCPSocket):
 
 
 class UnixSocket(BaseSocket):
-
     FAMILY = socket.AF_UNIX
 
     def __init__(self, addr, conf, log, fd=None):
@@ -175,6 +172,7 @@ def create_sockets(conf, log, fds=None):
 
         return listeners
 
+    log.info(f"{laddr=}")
     # no sockets is bound, first initialization of gunicorn in this env.
     for addr in laddr:
         sock_type = _sock_type(addr)

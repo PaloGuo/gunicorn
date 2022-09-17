@@ -9,7 +9,7 @@ import os
 import re
 import sys
 
-from gunicorn.http.message import HEADER_RE
+from gunicorn.http.message import HEADER_RE, Request
 from gunicorn.http.errors import InvalidHeader, InvalidHeaderName
 from gunicorn import SERVER_SOFTWARE, SERVER
 import gunicorn.util as util
@@ -106,93 +106,9 @@ def proxy_environ(req):
     }
 
 
-def create(req, sock, client, server, cfg):
-    resp = Response(req, sock, cfg)
-
-    # set initial environ
-    environ = default_environ(req, sock, cfg)
-
-    # default variables
-    host = None
-    script_name = os.environ.get("SCRIPT_NAME", "")
-
-    # add the headers to the environ
-    for hdr_name, hdr_value in req.headers:
-        if hdr_name == "EXPECT":
-            # handle expect
-            if hdr_value.lower() == "100-continue":
-                sock.send(b"HTTP/1.1 100 Continue\r\n\r\n")
-        elif hdr_name == 'HOST':
-            host = hdr_value
-        elif hdr_name == "SCRIPT_NAME":
-            script_name = hdr_value
-        elif hdr_name == "CONTENT-TYPE":
-            environ['CONTENT_TYPE'] = hdr_value
-            continue
-        elif hdr_name == "CONTENT-LENGTH":
-            environ['CONTENT_LENGTH'] = hdr_value
-            continue
-
-        key = 'HTTP_' + hdr_name.replace('-', '_')
-        if key in environ:
-            hdr_value = "%s,%s" % (environ[key], hdr_value)
-        environ[key] = hdr_value
-
-    # set the url scheme
-    environ['wsgi.url_scheme'] = req.scheme
-
-    # set the REMOTE_* keys in environ
-    # authors should be aware that REMOTE_HOST and REMOTE_ADDR
-    # may not qualify the remote addr:
-    # http://www.ietf.org/rfc/rfc3875
-    if isinstance(client, str):
-        environ['REMOTE_ADDR'] = client
-    elif isinstance(client, bytes):
-        environ['REMOTE_ADDR'] = client.decode()
-    else:
-        environ['REMOTE_ADDR'] = client[0]
-        environ['REMOTE_PORT'] = str(client[1])
-
-    # handle the SERVER_*
-    # Normally only the application should use the Host header but since the
-    # WSGI spec doesn't support unix sockets, we are using it to create
-    # viable SERVER_* if possible.
-    if isinstance(server, str):
-        server = server.split(":")
-        if len(server) == 1:
-            # unix socket
-            if host:
-                server = host.split(':')
-                if len(server) == 1:
-                    if req.scheme == "http":
-                        server.append(80)
-                    elif req.scheme == "https":
-                        server.append(443)
-                    else:
-                        server.append('')
-            else:
-                # no host header given which means that we are not behind a
-                # proxy, so append an empty port.
-                server.append('')
-    environ['SERVER_NAME'] = server[0]
-    environ['SERVER_PORT'] = str(server[1])
-
-    # set the path and script name
-    path_info = req.path
-    if script_name:
-        path_info = path_info.split(script_name, 1)[1]
-    environ['PATH_INFO'] = util.unquote_to_wsgi_str(path_info)
-    environ['SCRIPT_NAME'] = script_name
-
-    # override the environ with the correct remote and server address if
-    # we are behind a proxy using the proxy protocol.
-    environ.update(proxy_environ(req))
-    return resp, environ
-
-
 class Response(object):
 
-    def __init__(self, req, sock, cfg):
+    def __init__(self, req:Request, sock, cfg):
         self.req = req
         self.sock = sock
         self.version = SERVER
@@ -205,6 +121,9 @@ class Response(object):
         self.sent = 0
         self.upgrade = False
         self.cfg = cfg
+        log.info(
+            f"[Response __init__] {self.req=} {self.sock=} {self.cfg=}"
+        )
 
     def force_close(self):
         self.must_close = True
@@ -391,3 +310,90 @@ class Response(object):
             self.send_headers()
         if self.chunked:
             util.write_chunk(self.sock, b"")
+
+
+def create(req:Request, sock, client, server, cfg) -> tuple[Response, dict]:
+    log.info(
+        f"[wsgi create] {req=} {sock=} {client=} {server=} {cfg=}"
+    )
+    resp = Response(req, sock, cfg)
+
+    # set initial environ
+    environ = default_environ(req, sock, cfg)
+
+    # default variables
+    host = None
+    script_name = os.environ.get("SCRIPT_NAME", "")
+
+    # add the headers to the environ
+    for hdr_name, hdr_value in req.headers:
+        if hdr_name == "EXPECT":
+            # handle expect
+            if hdr_value.lower() == "100-continue":
+                sock.send(b"HTTP/1.1 100 Continue\r\n\r\n")
+        elif hdr_name == 'HOST':
+            host = hdr_value
+        elif hdr_name == "SCRIPT_NAME":
+            script_name = hdr_value
+        elif hdr_name == "CONTENT-TYPE":
+            environ['CONTENT_TYPE'] = hdr_value
+            continue
+        elif hdr_name == "CONTENT-LENGTH":
+            environ['CONTENT_LENGTH'] = hdr_value
+            continue
+
+        key = 'HTTP_' + hdr_name.replace('-', '_')
+        if key in environ:
+            hdr_value = "%s,%s" % (environ[key], hdr_value)
+        environ[key] = hdr_value
+
+    # set the url scheme
+    environ['wsgi.url_scheme'] = req.scheme
+
+    # set the REMOTE_* keys in environ
+    # authors should be aware that REMOTE_HOST and REMOTE_ADDR
+    # may not qualify the remote addr:
+    # http://www.ietf.org/rfc/rfc3875
+    if isinstance(client, str):
+        environ['REMOTE_ADDR'] = client
+    elif isinstance(client, bytes):
+        environ['REMOTE_ADDR'] = client.decode()
+    else:
+        environ['REMOTE_ADDR'] = client[0]
+        environ['REMOTE_PORT'] = str(client[1])
+
+    # handle the SERVER_*
+    # Normally only the application should use the Host header but since the
+    # WSGI spec doesn't support unix sockets, we are using it to create
+    # viable SERVER_* if possible.
+    if isinstance(server, str):
+        server = server.split(":")
+        if len(server) == 1:
+            # unix socket
+            if host:
+                server = host.split(':')
+                if len(server) == 1:
+                    if req.scheme == "http":
+                        server.append(80)
+                    elif req.scheme == "https":
+                        server.append(443)
+                    else:
+                        server.append('')
+            else:
+                # no host header given which means that we are not behind a
+                # proxy, so append an empty port.
+                server.append('')
+    environ['SERVER_NAME'] = server[0]
+    environ['SERVER_PORT'] = str(server[1])
+
+    # set the path and script name
+    path_info = req.path
+    if script_name:
+        path_info = path_info.split(script_name, 1)[1]
+    environ['PATH_INFO'] = util.unquote_to_wsgi_str(path_info)
+    environ['SCRIPT_NAME'] = script_name
+
+    # override the environ with the correct remote and server address if
+    # we are behind a proxy using the proxy protocol.
+    environ.update(proxy_environ(req))
+    return resp, environ

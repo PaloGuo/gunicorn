@@ -6,14 +6,18 @@
 from gunicorn.http.message import Request
 from gunicorn.http.unreader import SocketUnreader, IterUnreader
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 class Parser(object):
-
     mesg_class = None
 
     def __init__(self, cfg, source, source_addr):
         self.cfg = cfg
         if hasattr(source, "recv"):
+            # SocketUnreader
             self.unreader = SocketUnreader(source)
         else:
             self.unreader = IterUnreader(source)
@@ -22,6 +26,8 @@ class Parser(object):
 
         # request counter (for keepalive connetions)
         self.req_count = 0
+        logger.warning(f"[RequestParser __init__] {self.cfg=} {self.unreader=} {self.mesg=} {self.source_addr=}"
+                    f" {self.req_count=}")
 
     def __iter__(self):
         return self
@@ -39,14 +45,15 @@ class Parser(object):
 
         # Parse the next request
         self.req_count += 1
-        self.mesg = self.mesg_class(self.cfg, self.unreader, self.source_addr, self.req_count)
+        self.mesg: SocketUnreader = self.mesg_class(self.cfg, self.unreader, self.source_addr, self.req_count)
         if not self.mesg:
             raise StopIteration()
+
+        logger.info(f"[RequestParser __next__]  {self.mesg=}")
         return self.mesg
 
     next = __next__
 
 
 class RequestParser(Parser):
-
     mesg_class = Request

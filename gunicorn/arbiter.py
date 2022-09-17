@@ -41,8 +41,23 @@ class Arbiter(object):
 
     # I love dynamic languages
     SIG_QUEUE = []
+    """
+    [<Signals.SIGHUP: 1>, <Signals.SIGQUIT: 3>, <Signals.SIGINT: 2>, <Signals.SIGTERM: 15>, <Signals.SIGTTIN: 21>, 
+    <Signals.SIGTTOU: 22>, <Signals.SIGUSR1: 30>, <Signals.SIGUSR2: 31>, <Signals.SIGWINCH: 28>]
+    """
     SIGNALS = [getattr(signal, "SIG%s" % x)
                for x in "HUP QUIT INT TERM TTIN TTOU USR1 USR2 WINCH".split()]
+
+    """
+    {<Signals.SIGABRT: 6>: 'iot', <Signals.SIGALRM: 14>: 'alrm', <Signals.SIGBUS: 10>: 'bus', <Signals.SIGCHLD: 20>: 'chld', 
+    <Signals.SIGCONT: 19>: 'cont', <Signals.SIGEMT: 7>: 'emt', <Signals.SIGFPE: 8>: 'fpe', <Signals.SIGHUP: 1>: 'hup', 
+    <Signals.SIGILL: 4>: 'ill', <Signals.SIGINFO: 29>: 'info', <Signals.SIGINT: 2>: 'int', <Signals.SIGIO: 23>: 'io', 
+    <Signals.SIGKILL: 9>: 'kill', <Signals.SIGPIPE: 13>: 'pipe', <Signals.SIGPROF: 27>: 'prof', <Signals.SIGQUIT: 3>: 'quit', 
+    <Signals.SIGSEGV: 11>: 'segv', <Signals.SIGSTOP: 17>: 'stop', <Signals.SIGSYS: 12>: 'sys', <Signals.SIGTERM: 15>: 'term', 
+    <Signals.SIGTRAP: 5>: 'trap', <Signals.SIGTSTP: 18>: 'tstp', <Signals.SIGTTIN: 21>: 'ttin', <Signals.SIGTTOU: 22>: 'ttou', 
+    <Signals.SIGURG: 16>: 'urg', <Signals.SIGUSR1: 30>: 'usr1', <Signals.SIGUSR2: 31>: 'usr2', <Signals.SIGVTALRM: 26>: 'vtalrm', 
+    <Signals.SIGWINCH: 28>: 'winch', <Signals.SIGXCPU: 24>: 'xcpu', <Signals.SIGXFSZ: 25>: 'xfsz'}
+    """
     SIG_NAMES = dict(
         (getattr(signal, name), name[3:].lower()) for name in dir(signal)
         if name[:3] == "SIG" and name[3] != "_"
@@ -83,6 +98,7 @@ class Arbiter(object):
         old_value = self._num_workers
         self._num_workers = value
         self.cfg.nworkers_changed(self, value, old_value)
+
     num_workers = property(_get_num_workers, _set_num_workers)
 
     def setup(self, app):
@@ -158,6 +174,9 @@ class Arbiter(object):
         self.log.debug("Arbiter booted")
         self.log.info("Listening at: %s (%s)", listeners_str, self.pid)
         self.log.info("Using worker: %s", self.cfg.worker_class_str)
+        # [<gunicorn.sock.TCPSocket object at 0x1106e1d00>]
+        self.log.info(f"LISTENERS: {self.LISTENERS}")
+
         systemd.sd_notify("READY=1\nSTATUS=Gunicorn arbiter booted", self.log)
 
         # check worker class requirements
@@ -375,9 +394,9 @@ class Arbiter(object):
         killed gracefully  (ie. trying to wait for the current connection)
         """
         unlink = (
-            self.reexec_pid == self.master_pid == 0
-            and not self.systemd
-            and not self.cfg.reuse_port
+                self.reexec_pid == self.master_pid == 0
+                and not self.systemd
+                and not self.cfg.reuse_port
         )
         sock.close_sockets(self.LISTENERS, unlink)
 

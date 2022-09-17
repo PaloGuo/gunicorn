@@ -19,6 +19,7 @@ import textwrap
 
 from gunicorn import __version__, util
 from gunicorn.errors import ConfigError
+from gunicorn.http import Request
 from gunicorn.reloader import reloader_engines
 
 KNOWN_SETTINGS = []
@@ -316,6 +317,7 @@ class Setting(object):
     def __lt__(self, other):
         return (self.section == other.section and
                 self.order < other.order)
+
     __cmp__ = __lt__
 
     def __repr__(self):
@@ -448,12 +450,13 @@ def validate_callable(arity):
                 raise TypeError(str(e))
             except AttributeError:
                 raise TypeError("Can not load '%s' from '%s'"
-                    "" % (obj_name, mod_name))
+                                "" % (obj_name, mod_name))
         if not callable(val):
             raise TypeError("Value is not callable: %s" % val)
         if arity != -1 and arity != util.get_arity(val):
             raise TypeError("Value must have an arity of: %s" % arity)
         return val
+
     return _validate_callable
 
 
@@ -563,6 +566,7 @@ class ConfigFile(Setting):
            prefix.
         """
 
+
 class WSGIApp(Setting):
     name = "wsgi_app"
     section = "Config File"
@@ -574,6 +578,7 @@ class WSGIApp(Setting):
 
         .. versionadded:: 20.1.0
         """
+
 
 class Bind(Setting):
     name = "bind"
@@ -1522,7 +1527,7 @@ class SyslogTo(Setting):
 
     if PLATFORM == "darwin":
         default = "unix:///var/run/syslog"
-    elif PLATFORM in ('freebsd', 'dragonfly', ):
+    elif PLATFORM in ('freebsd', 'dragonfly',):
         default = "unix:///var/run/log"
     elif PLATFORM == "openbsd":
         default = "unix:///dev/log"
@@ -1617,6 +1622,7 @@ class StatsdHost(Setting):
     .. versionadded:: 19.1
     """
 
+
 # Datadog Statsd (dogstatsd) tags. https://docs.datadoghq.com/developers/dogstatsd/
 class DogstatsdTags(Setting):
     name = "dogstatsd_tags"
@@ -1631,6 +1637,7 @@ class DogstatsdTags(Setting):
 
     .. versionadded:: 20
     """
+
 
 class StatsdPrefix(Setting):
     name = "statsd_prefix"
@@ -1716,6 +1723,7 @@ class OnStarting(Setting):
 
     def on_starting(server):
         pass
+
     default = staticmethod(on_starting)
     desc = """\
         Called just before the master process is initialized.
@@ -1732,6 +1740,7 @@ class OnReload(Setting):
 
     def on_reload(server):
         pass
+
     default = staticmethod(on_reload)
     desc = """\
         Called to recycle workers during a reload via SIGHUP.
@@ -1748,6 +1757,7 @@ class WhenReady(Setting):
 
     def when_ready(server):
         pass
+
     default = staticmethod(when_ready)
     desc = """\
         Called just after the server is started.
@@ -1764,6 +1774,7 @@ class Prefork(Setting):
 
     def pre_fork(server, worker):
         pass
+
     default = staticmethod(pre_fork)
     desc = """\
         Called just before a worker is forked.
@@ -1781,6 +1792,7 @@ class Postfork(Setting):
 
     def post_fork(server, worker):
         pass
+
     default = staticmethod(post_fork)
     desc = """\
         Called just after a worker has been forked.
@@ -1854,6 +1866,7 @@ class PreExec(Setting):
 
     def pre_exec(server):
         pass
+
     default = staticmethod(pre_exec)
     desc = """\
         Called just before a new master process is forked.
@@ -1868,8 +1881,9 @@ class PreRequest(Setting):
     validator = validate_callable(2)
     type = callable
 
-    def pre_request(worker, req):
+    def pre_request(worker, req: Request):
         worker.log.debug("%s %s" % (req.method, req.path))
+
     default = staticmethod(pre_request)
     desc = """\
         Called just before a worker processes the request.
@@ -1887,6 +1901,7 @@ class PostRequest(Setting):
 
     def post_request(worker, req, environ, resp):
         pass
+
     default = staticmethod(post_request)
     desc = """\
         Called after a worker processes the request.
@@ -1904,6 +1919,7 @@ class ChildExit(Setting):
 
     def child_exit(server, worker):
         pass
+
     default = staticmethod(child_exit)
     desc = """\
         Called just after a worker has been exited, in the master process.
@@ -1923,6 +1939,7 @@ class WorkerExit(Setting):
 
     def worker_exit(server, worker):
         pass
+
     default = staticmethod(worker_exit)
     desc = """\
         Called just after a worker has been exited, in the worker process.
@@ -1940,6 +1957,7 @@ class NumWorkersChanged(Setting):
 
     def nworkers_changed(server, new_value, old_value):
         pass
+
     default = staticmethod(nworkers_changed)
     desc = """\
         Called just after *num_workers* has been changed.

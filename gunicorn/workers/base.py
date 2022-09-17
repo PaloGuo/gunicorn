@@ -27,7 +27,6 @@ from gunicorn.workers.workertmp import WorkerTmp
 
 
 class Worker(object):
-
     SIGNALS = [getattr(signal, "SIG%s" % x) for x in (
         "ABRT HUP QUIT INT TERM USR1 USR2 WINCH CHLD".split()
     )]
@@ -42,6 +41,7 @@ class Worker(object):
         """
         self.age = age
         self.pid = "[booting]"
+        # master父进程id
         self.ppid = ppid
         self.sockets = sockets
         self.app = app
@@ -62,6 +62,12 @@ class Worker(object):
         self.alive = True
         self.log = log
         self.tmp = WorkerTmp(cfg)
+        log.info(
+            f"[Worker] __init__ {self.age=} {self.pid=} {self.ppid=} {self.sockets=}"
+            f" {self.app=} {self.timeout=} {self.cfg=} {self.booted=} {self.aborted=}"
+            f" {self.reloader=} {self.nr=} {self.max_requests=} {self.alive=} {self.log=}"
+            f" {self.tmp=}"
+        )
 
     def __str__(self):
         return "<Worker %s>" % self.pid
@@ -71,6 +77,7 @@ class Worker(object):
         Your worker subclass must arrange to have this method called
         once every ``self.timeout`` seconds. If you fail in accomplishing
         this task, the master process will murder your workers.
+        worker进程记录最近存活时间
         """
         self.tmp.notify()
 
@@ -79,6 +86,7 @@ class Worker(object):
         This is the mainloop of a worker process. You should override
         this method in a subclass to provide the intended behaviour
         for your particular evil schemes.
+        子类实现
         """
         raise NotImplementedError()
 
@@ -94,6 +102,7 @@ class Worker(object):
             for k, v in self.cfg.env.items():
                 os.environ[k] = v
 
+        """ 设置worker进程的的 set user and group"""
         util.set_owner_process(self.cfg.uid, self.cfg.gid,
                                initgroups=self.cfg.initgroups)
 
@@ -110,11 +119,12 @@ class Worker(object):
         for s in self.sockets:
             util.close_on_exec(s)
         util.close_on_exec(self.tmp.fileno())
-
+        # 需要监测的读文件描述符，socket以及管道读描述符
         self.wait_fds = self.sockets + [self.PIPE[0]]
 
         self.log.close_on_exec()
-
+        # 注册信号处理函数
+        # write_fd 写操作符接收信号
         self.init_signals()
 
         # start the reloader
@@ -130,7 +140,7 @@ class Worker(object):
             reloader_cls = reloader_engines[self.cfg.reload_engine]
             self.reloader = reloader_cls(extra_files=self.cfg.reload_extra_files,
                                          callback=changed)
-
+        # 加载wsgi应用
         self.load_wsgi()
         if self.reloader:
             self.reloader.start()
@@ -144,6 +154,7 @@ class Worker(object):
     def load_wsgi(self):
         try:
             self.wsgi = self.app.wsgi()
+            self.log.info(f"[load_wsgi] {self.wsgi=}")
         except SyntaxError as e:
             if not self.cfg.reload:
                 raise
@@ -182,6 +193,13 @@ class Worker(object):
         signal.siginterrupt(signal.SIGUSR1, False)
 
         if hasattr(signal, 'set_wakeup_fd'):
+            """写操作符
+            self.PIPE = (read_fd, write_fd) = os.pipe()
+            将wakeup描述符设置为fd。当收到信号时，'\0'这个字节会被写到fd。该函数通常用于唤醒poll或select调用。同时，需要信号被信号处理函数处理。
+            该函数会返回之前设置的wakeup描述符，如果原来没有设置过wakeup描述符，那么返回-1。如果将fd设置为-1，那么会关闭wakeup功能；
+            否则，fd必须是非阻塞的。使用signal.set_wakeup_fd()函数的库，在再次调用poll或select之前，应该读尽fd的缓冲区。
+            在非主线程上调用该函数，会引发ValueError异常。
+            """
             signal.set_wakeup_fd(self.PIPE[1])
 
     def handle_usr1(self, sig, frame):
@@ -206,12 +224,12 @@ class Worker(object):
         request_start = datetime.now()
         addr = addr or ('', -1)  # unix socket case
         if isinstance(exc, (
-            InvalidRequestLine, InvalidRequestMethod,
-            InvalidHTTPVersion, InvalidHeader, InvalidHeaderName,
-            LimitRequestLine, LimitRequestHeaders,
-            InvalidProxyLine, ForbiddenProxyRequest,
-            InvalidSchemeHeaders,
-            SSLError,
+                InvalidRequestLine, InvalidRequestMethod,
+                InvalidHTTPVersion, InvalidHeader, InvalidHeaderName,
+                LimitRequestLine, LimitRequestHeaders,
+                InvalidProxyLine, ForbiddenProxyRequest,
+                InvalidSchemeHeaders,
+                SSLError,
         )):
 
             status_int = 400

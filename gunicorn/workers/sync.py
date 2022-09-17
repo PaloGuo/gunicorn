@@ -16,6 +16,7 @@ import gunicorn.http as http
 import gunicorn.http.wsgi as wsgi
 import gunicorn.util as util
 import gunicorn.workers.base as base
+from gunicorn.http import Request
 
 
 class StopWaiting(Exception):
@@ -26,8 +27,11 @@ class SyncWorker(base.Worker):
 
     def accept(self, listener):
         client, addr = listener.accept()
-        client.setblocking(1)
+        self.log.info(f"[SyncWorker accept] {client=} {addr=}")
+        # 套接字client 设置阻塞状态
+        client.setblocking(True)
         util.close_on_exec(client)
+        # 从套接字接受数据
         self.handle(listener, client, addr)
 
     def wait(self, timeout):
@@ -59,6 +63,7 @@ class SyncWorker(base.Worker):
     def run_for_one(self, timeout):
         listener = self.sockets[0]
         while self.alive:
+            # worker进程记录存活时间
             self.notify()
 
             # Accept a connection. If we get an error telling us
@@ -66,6 +71,7 @@ class SyncWorker(base.Worker):
             # select which is where we'll wait for a bit for new
             # workers to come give us some love.
             try:
+                # 建立新连接，接收数据
                 self.accept(listener)
                 # Keep processing clients until no one is waiting. This
                 # prevents the need to select() for every client that we
@@ -81,6 +87,9 @@ class SyncWorker(base.Worker):
                 return
 
             try:
+                self.log.info(
+                    f"[SyncWorker run_for_one]"
+                )
                 self.wait(timeout)
             except StopWaiting:
                 return
@@ -116,8 +125,10 @@ class SyncWorker(base.Worker):
 
         # self.socket appears to lose its blocking status after
         # we fork in the arbiter. Reset it here.
+        # 从master进程fork出来的worker进程继承的套接字失去不阻塞状态，在这里重置不阻塞状态
         for s in self.sockets:
-            s.setblocking(0)
+            # 套接字不阻塞
+            s.setblocking(False)
 
         if len(self.sockets) > 1:
             self.run_for_multiple(timeout)
@@ -125,14 +136,17 @@ class SyncWorker(base.Worker):
             self.run_for_one(timeout)
 
     def handle(self, listener, client, addr):
+        from gunicorn.http.message import Request
+
+        self.log.info(f"[SyncWorker accept] {listener=} {client=} {addr=}")
         req = None
         try:
             if self.cfg.is_ssl:
                 client = ssl.wrap_socket(client, server_side=True,
                                          **self.cfg.ssl_options)
-
             parser = http.RequestParser(self.cfg, client, addr)
-            req = next(parser)
+            req: Request = next(parser)
+            self.log.info(f"[SyncWorker parser] {listener=} {req} {client=} {addr=}")
             self.handle_request(listener, req, client, addr)
         except http.errors.NoMoreData as e:
             self.log.debug("Ignored premature client disconnection. %s", e)
@@ -160,10 +174,14 @@ class SyncWorker(base.Worker):
         finally:
             util.close(client)
 
-    def handle_request(self, listener, req, client, addr):
+    def handle_request(self, listener, req: Request, client, addr):
+        self.log.info(
+            f"[SyncWorker handle_request] {listener=} {req=} {client=} {addr=}"
+        )
         environ = {}
         resp = None
         try:
+            # pre_request 自定义操作
             self.cfg.pre_request(self, req)
             request_start = datetime.now()
             resp, environ = wsgi.create(req, client, addr,

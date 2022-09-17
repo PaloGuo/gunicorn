@@ -4,10 +4,13 @@
 # See the NOTICE for more information.
 
 import io
+import logging
 import os
 
 # Classes that can undo reading data from
 # a given type of data source.
+
+logger = logging.getLogger(__name__)
 
 
 class Unreader(object):
