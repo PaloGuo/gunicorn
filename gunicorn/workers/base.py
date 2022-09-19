@@ -111,6 +111,9 @@ class Worker(object):
 
         # For waking ourselves up
         self.PIPE = os.pipe()
+        self.log.warning(
+            f"[Worker] init_process {self.PIPE=}"
+        )
         for p in self.PIPE:
             util.set_non_blocking(p)
             util.close_on_exec(p)

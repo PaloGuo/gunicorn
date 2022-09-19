@@ -17,6 +17,9 @@ import gunicorn.http.wsgi as wsgi
 import gunicorn.util as util
 import gunicorn.workers.base as base
 from gunicorn.http import Request
+import logging
+
+log = logging.getLogger(__name__)
 
 
 class StopWaiting(Exception):
@@ -29,9 +32,14 @@ class SyncWorker(base.Worker):
         client, addr = listener.accept()
         self.log.info(f"[SyncWorker accept] {client=} {addr=}")
         # 套接字client 设置阻塞状态
-        client.setblocking(True)
+        client.setblocking(1)
+        """
+        阻塞模式下，如果接收缓冲区没有数据可读，recv() 会一直阻塞，直到有数据可读。
+        
+        非阻塞模式下，recv() 从接收缓冲区读取数据时，如果没有数据，也会立马返回，并抛出 BlockingIOError: [Errno 11] Resource temporarily unavailable 异常。
+        """
         util.close_on_exec(client)
-        # 从套接字接受数据
+        # 从套接字接受数据，调用处理函数，并关闭client
         self.handle(listener, client, addr)
 
     def wait(self, timeout):
@@ -79,6 +87,9 @@ class SyncWorker(base.Worker):
                 continue
 
             except EnvironmentError as e:
+                log.warning(
+                    f"[SyncWorker run_for_one] while accept {e}"
+                )
                 if e.errno not in (errno.EAGAIN, errno.ECONNABORTED,
                                    errno.EWOULDBLOCK):
                     raise
@@ -88,7 +99,7 @@ class SyncWorker(base.Worker):
 
             try:
                 self.log.info(
-                    f"[SyncWorker run_for_one]"
+                    f"[SyncWorker run_for_one] wait"
                 )
                 self.wait(timeout)
             except StopWaiting:

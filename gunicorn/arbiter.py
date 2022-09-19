@@ -195,21 +195,34 @@ class Arbiter(object):
             os.close(p)
 
         # initialize the pipe
+        # initialize the pipe
+        # read_fd 读描述符
+        # write_fd 写描述符
+        # self.PIPE = (read_fd, write_fd) = os.pipe()
         self.PIPE = pair = os.pipe()
+        self.log.warning(
+            f"[Arbiter init_signals] {self.PIPE=}"
+        )
         for p in pair:
+            # 管道描述符 不阻塞
             util.set_non_blocking(p)
             util.close_on_exec(p)
 
         self.log.close_on_exec()
 
         # initialize all signals
+        # [<Signals.SIGHUP: 1>, <Signals.SIGQUIT: 3>, <Signals.SIGINT: 2>, <Signals.SIGTERM: 15>,
+        # <Signals.SIGTTIN: 21>, <Signals.SIGTTOU: 22>, <Signals.SIGUSR1: 30>, <Signals.SIGUSR2: 31>, <Signals.SIGWINCH: 28>]
         for s in self.SIGNALS:
             signal.signal(s, self.signal)
         signal.signal(signal.SIGCHLD, self.handle_chld)
 
     def signal(self, sig, frame):
+        """收到内核发给master进程的信号，加入信号队列
+        """
         if len(self.SIG_QUEUE) < 5:
             self.SIG_QUEUE.append(sig)
+            # 唤醒master进程
             self.wakeup()
 
     def run(self):
@@ -219,13 +232,16 @@ class Arbiter(object):
 
         try:
             self.manage_workers()
-
             while True:
+                # 3.负责判断该进程是否是正真的master，如果是则提升为正真的master(这一块放在最后一部分进行分析)
                 self.maybe_promote_master()
 
+                # 4.获取信号
                 sig = self.SIG_QUEUE.pop(0) if self.SIG_QUEUE else None
                 if sig is None:
+                    # 5.利用select休眠1秒
                     self.sleep()
+                    # 6.判断worker是否超时，如果是则杀掉worker(将在Worker章节进行分析)
                     self.murder_workers()
                     self.manage_workers()
                     continue
@@ -235,12 +251,14 @@ class Arbiter(object):
                     continue
 
                 signame = self.SIG_NAMES.get(sig)
+                # 调用对应的信号处理
                 handler = getattr(self, "handle_%s" % signame, None)
                 if not handler:
                     self.log.error("Unhandled signal: %s", signame)
                     continue
                 self.log.info("Handling signal: %s", signame)
                 handler()
+                # 7.这样下次循环就不会等待一秒了
                 self.wakeup()
         except (StopIteration, KeyboardInterrupt):
             self.halt()
@@ -257,7 +275,9 @@ class Arbiter(object):
             sys.exit(-1)
 
     def handle_chld(self, sig, frame):
-        "SIGCHLD handling"
+        """SIGCHLD handling
+        当Worker进程退出时，会发送信号CHLD给Master进程
+        """
         self.reap_workers()
         self.wakeup()
 
@@ -349,6 +369,7 @@ class Arbiter(object):
     def wakeup(self):
         """\
         Wake up the arbiter by writing to the PIPE
+        通过写入管道一个字节固定长度数据，唤醒master进程
         """
         try:
             os.write(self.PIPE[1], b'.')
@@ -371,12 +392,14 @@ class Arbiter(object):
         """\
         Sleep until PIPE is readable or we timeout.
         A readable PIPE means a signal occurred.
+        管道 读描述符 等待超时
         """
         try:
             ready = select.select([self.PIPE[0]], [], [], 1.0)
             if not ready[0]:
                 return
             while os.read(self.PIPE[0], 1):
+                # 管道 读描述符 不阻塞
                 pass
         except (select.error, OSError) as e:
             # TODO: select.error is a subclass of OSError since Python 3.3.
@@ -516,6 +539,7 @@ class Arbiter(object):
             except (OSError, ValueError):
                 continue
 
+            # 向子进程worker发送终止信号
             if not worker.aborted:
                 self.log.critical("WORKER TIMEOUT (pid:%s)", pid)
                 worker.aborted = True
@@ -524,11 +548,10 @@ class Arbiter(object):
                 self.kill_worker(pid, signal.SIGKILL)
 
     def reap_workers(self):
-        """\
-        Reap workers to avoid zombie processes
-        """
         try:
+            # 注意信号不排队的问题，你可以循环检查waitpid()子进程的状态.
             while True:
+                # 获取僵死子进程的信息
                 wpid, status = os.waitpid(-1, os.WNOHANG)
                 if not wpid:
                     break
@@ -545,13 +568,23 @@ class Arbiter(object):
                     if exitcode == self.APP_LOAD_ERROR:
                         reason = "App failed to load."
                         raise HaltServer(reason, self.APP_LOAD_ERROR)
+                    # WIFSIGNALED(status)为非0表明进程异常终止，记录异常信息。
+                    if os.WIFSIGNALED(status):
+                        self.log.warning(
+                            "Worker with pid %s was terminated due to signal %s",
+                            wpid,
+                            os.WTERMSIG(status)
+                        )
 
+                    # 清除Master进程的数据
                     worker = self.WORKERS.pop(wpid, None)
                     if not worker:
                         continue
+                    # 关闭临时文件
                     worker.tmp.close()
                     self.cfg.child_exit(self, worker)
         except OSError as e:
+            # errno.ECHILD代表调用进程没有任何子进程，该类型的错误不应该报错
             if e.errno != errno.ECHILD:
                 raise
 
@@ -559,6 +592,9 @@ class Arbiter(object):
         """\
         Maintain the number of workers by spawning or killing
         as required.
+        维持子进程worker数目
+        spawn_workers 创建子进程
+        kill_worker 杀死进程
         """
         if len(self.WORKERS) < self.num_workers:
             self.spawn_workers()
@@ -583,13 +619,17 @@ class Arbiter(object):
                                    self.app, self.timeout / 2.0,
                                    self.cfg, self.log)
         self.cfg.pre_fork(self, worker)
+        # 开始Fork
         pid = os.fork()
         if pid != 0:
+            # 对于主进程，记录创建的worker, 然后就返回了，master主进程继续执行自己的逻辑
             worker.pid = pid
             self.WORKERS[pid] = worker
             return pid
 
         # Do not inherit the temporary files of other workers
+        # 对于创建的子进程
+        # 不继承其它worker的tmp文件
         for sibling in self.WORKERS.values():
             sibling.tmp.close()
 
